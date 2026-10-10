@@ -124,6 +124,14 @@ device keeps its own choice.
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
 
+### Group threads by project
+
+Click the group button in the sidebar header, or turn on **Settings → General → Group threads by
+project**, to show each section's threads under project headers. On iOS and Android, use
+**Settings → Organization** or the thread list options menu. Projects follow your project order,
+and threads without a known project appear under **No project**. Dragging or moving a thread
+reorders it within its project. Search results stay in one list. Each device keeps its own choice.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list

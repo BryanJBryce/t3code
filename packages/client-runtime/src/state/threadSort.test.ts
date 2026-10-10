@@ -5,6 +5,7 @@ import {
   activeThreadAnchorTimestampMs,
   generateSpreadPinOrderKeys,
   getLatestThreadForProject,
+  groupThreadsByProject,
   pinOrderKeyBetween,
   planPinnedMove,
   planPinnedReorder,
@@ -509,5 +510,47 @@ describe("sortActiveThreadsByOrderKey", () => {
     const keys = new Map(assignments.map((assignment) => [assignment.id, assignment.orderKey]));
     const updated = threads.map((thread) => ({ ...thread, activeOrderKey: keys.get(thread.id) }));
     expect(sortActiveThreadsByOrderKey(updated).map((thread) => thread.id)).toEqual(orderedIds);
+  });
+});
+
+describe("groupThreadsByProject", () => {
+  const rank = new Map([
+    ["repo-b", 0],
+    ["repo-a", 1],
+  ]);
+  const thread = (id: string, project: string | null) => ({ id, project });
+  const projectOf = (entry: { project: string | null }) => entry.project;
+
+  it("orders runs by project rank and keeps input order inside each run", () => {
+    const groups = groupThreadsByProject(
+      [
+        thread("a1", "repo-a"),
+        thread("b1", "repo-b"),
+        thread("a2", "repo-a"),
+        thread("b2", "repo-b"),
+      ],
+      projectOf,
+      rank,
+    );
+    expect(groups.map((group) => [group.projectKey, group.threads.map((t) => t.id)])).toEqual([
+      ["repo-b", ["b1", "b2"]],
+      ["repo-a", ["a1", "a2"]],
+    ]);
+  });
+
+  it("collects unknown and missing projects in one trailing run", () => {
+    const groups = groupThreadsByProject(
+      [thread("x", "gone"), thread("a1", "repo-a"), thread("y", null)],
+      projectOf,
+      rank,
+    );
+    expect(groups.map((group) => [group.projectKey, group.threads.map((t) => t.id)])).toEqual([
+      ["repo-a", ["a1"]],
+      [null, ["x", "y"]],
+    ]);
+  });
+
+  it("returns no runs for an empty list", () => {
+    expect(groupThreadsByProject([], projectOf, rank)).toEqual([]);
   });
 });

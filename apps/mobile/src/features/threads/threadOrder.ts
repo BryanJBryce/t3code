@@ -123,12 +123,15 @@ export interface ThreadMoveAvailability {
  * the planner's plan rules lives in the body below; the reference-parity test
  * pins them row-by-row, including adversarial keys and hidden reservations.
  */
-export function computeThreadMoveAvailability(input: {
-  readonly ordered: readonly OrderRow[];
+export function computeThreadMoveAvailability<Row extends OrderRow>(input: {
+  readonly ordered: readonly Row[];
   readonly allThreads?: readonly OrderRow[];
   readonly section: PendingThreadOrder["section"];
   readonly reorderableEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly pendingOrder?: PendingThreadOrder | null;
+  /** While the list is grouped by project: each displayed row's group (see
+      `resolveGroupedThreadMove`). Moves then step over same-group rows. */
+  readonly groupOf?: ((row: Row) => string | undefined) | null;
 }): Map<string, ThreadMoveAvailability> {
   const result = new Map<string, ThreadMoveAvailability>();
   // A reorder in flight locks the whole list until its receipt lands.
@@ -160,7 +163,7 @@ export function computeThreadMoveAvailability(input: {
   keysById.forEach((key, id) => {
     if (key != null && !indexById.has(id)) reservedKeys.add(key);
   });
-  // Mirror of `planPinnedReorder` for adjacent swaps, hoisted so every row is
+  // Mirror of `planPinnedReorder` for up/down moves, hoisted so every row is
   // answered in O(1) amortized instead of one planner probe per row:
   //
   // Fast path (both neighbors keyed): the fresh key between the landing
@@ -171,10 +174,8 @@ export function computeThreadMoveAvailability(input: {
   //
   // Rewrite path (keyless/unusable neighbor, or key space exhausted): fresh
   // spread keys for every row; only positions whose current key differs get
-  // written. A swap permutes two rows without changing the multiset, so the
-  // assignment set differs from the unswapped baseline at at most those two
-  // positions, and mismatch/writability tallies computed once per section
-  // answer each row with a constant-size delta.
+  // written. A move only shifts the rows between its two ends, so tallies
+  // computed once per section answer each row in constant time.
   const midpoints = new Map<string, string | null>();
   const fastPathKey = (beforeKey: string | null, afterKey: string | null): string | null => {
     const memoKey = `${beforeKey ?? ""}\u0000${afterKey ?? ""}`;
@@ -197,25 +198,68 @@ export function computeThreadMoveAvailability(input: {
     baselineWrites += 1;
     if (!writableRow[position]) baselineUnwritableWrites += 1;
   }
-  // `movedId` swaps with its neighbor; ids at the two swapped positions change,
-  // so only their tally contributions are recomputed.
-  const rewriteViable = (index: number): boolean => {
-    let writes = baselineWrites;
-    let unwritableWrites = baselineUnwritableWrites;
-    for (const position of [index, index + 1]) {
-      const other = position === index ? index + 1 : index;
-      if (currentKeys[position] !== spreadKeys[position]) {
-        writes -= 1;
-        if (!writableRow[position]) unwritableWrites -= 1;
-      }
-      // After the swap this position holds the row that was at `other`.
-      if (currentKeys[other] !== spreadKeys[position]) {
-        writes += 1;
-        if (!writableRow[other]) unwritableWrites += 1;
-      }
-    }
+  // A move from `from` to `to` shifts every row between them by one place.
+  // Prefix sums of the baseline mismatches and of the mismatches each row
+  // would have one place up or down answer any range in O(1).
+  const count = orderedIds.length;
+  const prefix = () => Array.from({ length: count + 1 }, () => 0);
+  const base = [prefix(), prefix()];
+  const shiftedUp = [prefix(), prefix()];
+  const shiftedDown = [prefix(), prefix()];
+  const tally = (sums: number[][], at: number, source: number | null) => {
+    const mismatch = source !== null && currentKeys[source] !== spreadKeys[at];
+    sums[0]![at + 1] = sums[0]![at]! + (mismatch ? 1 : 0);
+    sums[1]![at + 1] = sums[1]![at]! + (mismatch && !writableRow[source!] ? 1 : 0);
+  };
+  for (let position = 0; position < count; position += 1) {
+    tally(base, position, position);
+    // `shiftedUp[p]`: position p holding the row from p + 1; `shiftedDown[p]`:
+    // position p holding the row from p - 1.
+    tally(shiftedUp, position, position + 1 < count ? position + 1 : null);
+    tally(shiftedDown, position, position > 0 ? position - 1 : null);
+  }
+  const range = (sums: number[][], kind: 0 | 1, start: number, end: number) =>
+    end < start ? 0 : sums[kind]![end + 1]! - sums[kind]![start]!;
+  const rewriteViable = (from: number, to: number): boolean => {
+    const low = Math.min(from, to);
+    const high = Math.max(from, to);
+    const shifted = to > from ? shiftedUp : shiftedDown;
+    const shiftStart = to > from ? from : to + 1;
+    const shiftEnd = to > from ? to - 1 : from;
+    const movedMismatch = currentKeys[from] !== spreadKeys[to];
+    const writes =
+      baselineWrites -
+      range(base, 0, low, high) +
+      range(shifted, 0, shiftStart, shiftEnd) +
+      (movedMismatch ? 1 : 0);
+    const unwritableWrites =
+      baselineUnwritableWrites -
+      range(base, 1, low, high) +
+      range(shifted, 1, shiftStart, shiftEnd) +
+      (movedMismatch && !writableRow[from] ? 1 : 0);
     return writes > 0 && unwritableWrites === 0;
   };
+  // Grouped lists step to the nearest row of the same group, found in one
+  // pass in each direction.
+  const groupOf = input.groupOf ?? null;
+  const groupTargets = (() => {
+    if (groupOf === null) return null;
+    const groups = rows.map((row) => groupOf(row));
+    const previous = Array.from({ length: count }, (): number | null => null);
+    const next = Array.from({ length: count }, (): number | null => null);
+    const last = new Map<string, number>();
+    for (let position = 0; position < count; position += 1) {
+      const group = groups[position];
+      if (group === undefined) continue;
+      const before = last.get(group);
+      if (before !== undefined) {
+        previous[position] = before;
+        next[before] = position;
+      }
+      last.set(group, position);
+    }
+    return { groups, previous, next };
+  })();
   for (const row of rows) {
     const movedId = rowId(row);
     const denied = { canMoveUp: false, canMoveDown: false };
@@ -229,14 +273,19 @@ export function computeThreadMoveAvailability(input: {
       continue;
     }
     const adjacentAvailable = (towardUp: boolean): boolean => {
-      const shifted = index + (towardUp ? -1 : 1);
-      if (shifted < 0 || shifted >= orderedIds.length) return false;
-      // The swap exchanges the row with its neighbor; afterwards the moved row
-      // sits at `shifted` between `beforeIndex` and `afterIndex` of the OLD
-      // order: moving up it lands between old(index-2) and old(index-1),
-      // moving down between old(index+1) and old(index+2).
-      const beforeIndex = towardUp ? index - 2 : index + 1;
-      const afterIndex = towardUp ? index - 1 : index + 2;
+      const target =
+        groupTargets === null
+          ? index + (towardUp ? -1 : 1)
+          : ((groupTargets.groups[index] === undefined
+              ? null
+              : (towardUp ? groupTargets.previous : groupTargets.next)[index]) ?? null);
+      if (target === null || target < 0 || target >= orderedIds.length) return false;
+      // The moved row ends at `target`, placed before (up) or after (down) the
+      // row there, so it lands between these rows of the OLD order: moving up
+      // between old(target-1) and old(target), moving down between
+      // old(target) and old(target+1).
+      const beforeIndex = towardUp ? target - 1 : target;
+      const afterIndex = towardUp ? target : target + 1;
       const beforeId = beforeIndex < 0 ? null : (orderedIds[beforeIndex] ?? null);
       const afterId = afterIndex >= orderedIds.length ? null : (orderedIds[afterIndex] ?? null);
       const beforeKey = beforeId === null ? null : (keysById.get(beforeId) ?? null);
@@ -247,7 +296,7 @@ export function computeThreadMoveAvailability(input: {
         if (key !== null) return true;
       }
       // Keyless neighbor or exhausted key space: the section rewrite runs.
-      return rewriteViable(Math.min(index, shifted));
+      return rewriteViable(index, target);
     };
     result.set(movedId, {
       canMoveUp: adjacentAvailable(true),
@@ -255,6 +304,34 @@ export function computeThreadMoveAvailability(input: {
     });
   }
   return result;
+}
+
+/**
+ * Up/down while the list is grouped by project: the explicit placement next to
+ * the nearest row of the moved row's group in the flat section order. Rows of
+ * other groups keep their places, so the order keys of every other project
+ * keep their interleaving. `groupOf` returns undefined for rows the list does
+ * not show. Null when no same-group row lies in that direction.
+ */
+export function resolveGroupedThreadMove<Row extends OrderRow>(input: {
+  readonly ordered: readonly Row[];
+  readonly movedId: string;
+  readonly direction: "up" | "down";
+  readonly groupOf: (row: Row) => string | undefined;
+}): ThreadMoveDestination | null {
+  const { ordered, direction, groupOf } = input;
+  const from = ordered.findIndex((row) => rowId(row) === input.movedId);
+  const moved = ordered[from];
+  const group = moved === undefined ? undefined : groupOf(moved);
+  if (group === undefined) return null;
+  const step = direction === "up" ? -1 : 1;
+  for (let index = from + step; index >= 0 && index < ordered.length; index += step) {
+    const row = ordered[index]!;
+    if (groupOf(row) === group) {
+      return { targetId: rowId(row), placement: direction === "up" ? "before" : "after" };
+    }
+  }
+  return null;
 }
 
 export function createPendingThreadOrder(input: {

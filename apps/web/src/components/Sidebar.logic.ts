@@ -160,15 +160,57 @@ export type SidebarListMarker =
   | "pinned-divider"
   | "working-header"
   | "snoozed-header"
-  | "settled-header";
+  | "settled-header"
+  /** A project's header inside one section while threads are grouped by
+      project (`project:<section>:<project key>`). Display only: it never
+      becomes a drop target, so a drag cannot land on or across it. */
+  | `project:${string}`;
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
   return `${SIDEBAR_MARKER_PREFIX}${marker}`;
 }
 
+export function isSidebarProjectHeaderId(id: string): boolean {
+  return id.startsWith(`${SIDEBAR_MARKER_PREFIX}project:`);
+}
+
 export type SidebarListItem =
   | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
-  | { readonly kind: "marker"; readonly marker: SidebarListMarker };
+  | { readonly kind: "marker"; readonly marker: SidebarListMarker; readonly label?: string };
+
+/** Map a drop order read off a project-grouped section back onto the flat
+    order its order keys follow. Only the moved row changes place: it lands
+    next to its nearest same-project neighbor in the grouped order, so other
+    projects keep their interleaving and a drop inside another project's run
+    leaves the order unchanged. */
+export function ungroupSidebarDropOrder(input: {
+  readonly groupedOrder: readonly string[];
+  readonly flatOrder: readonly string[];
+  readonly movedKey: string;
+  readonly projectKeyOf: (key: string) => string | null;
+}): string[] {
+  const { groupedOrder, flatOrder, movedKey, projectKeyOf } = input;
+  const order = flatOrder.filter((key) => key !== movedKey);
+  const index = groupedOrder.indexOf(movedKey);
+  if (index === -1) return order;
+  const project = projectKeyOf(movedKey);
+  const inProject = (key: string) => projectKeyOf(key) === project;
+  const grouped = groupedOrder.filter(inProject);
+  const flat = flatOrder.filter(inProject);
+  if (grouped.length === flat.length && grouped.every((key, at) => key === flat[at])) {
+    return [...flatOrder];
+  }
+  const sameProject = (key: string) => key !== movedKey && inProject(key);
+  const insertAt = (key: string | undefined, offset: number) => {
+    const at = key === undefined ? -1 : order.indexOf(key);
+    order.splice(at === -1 ? order.length : at + offset, 0, movedKey);
+    return order;
+  };
+  const before = groupedOrder.slice(0, index).findLast(sameProject);
+  if (before !== undefined) return insertAt(before, 1);
+  const following = groupedOrder.slice(index + 1);
+  return insertAt(following.find(sameProject) ?? following[0], 0);
+}
 
 export function sidebarListItemId(item: SidebarListItem): string {
   return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);

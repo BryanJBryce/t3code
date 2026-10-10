@@ -893,3 +893,112 @@ describe("lifted card clearance", () => {
     expect(511 + apply(511, 36, -500, 136, 114).y).toBe(250);
   });
 });
+
+describe("project-grouped drag projection", () => {
+  // Keys name their project by their first letter; project a renders first.
+  const projectGrouping = {
+    projectKeyOf: (key: string) => key[0]!,
+    rank: new Map([
+      ["a", 0],
+      ["b", 1],
+    ]),
+  };
+  const top = (
+    result: Map<string, ReturnType<SortingStrategy>>,
+    items: SidebarListItem[],
+    key: string,
+  ) => {
+    const args = layout(items, key, key);
+    return args.rects[args.activeIndex]!.top + (result.get(key)?.y ?? 0);
+  };
+
+  it("previews a time-ordered inbox drop inside the lifted row's project run", () => {
+    // Committed: time order a1, b1, bp, a2 renders grouped as a1, a2 | b1, bp.
+    const items = [
+      pinnedHeader,
+      thread("bp", "pinned"),
+      divider,
+      thread("a1", "active"),
+      thread("a2", "active"),
+      thread("b1", "active"),
+      marker("working-header"),
+      thread("w", "working"),
+      settledHeader,
+      marker("settled-placeholder"),
+    ];
+    const result = preview(
+      {
+        items,
+        settledOrder: [],
+        settledExpanded: false,
+        activeOrder: ["a1", "b1", "bp", "a2"],
+        projectGrouping,
+      },
+      "bp",
+      "a1",
+    );
+    expect(top(result, items, "a2") - top(result, items, "a1")).toBe(83);
+    expect(top(result, items, "b1") - top(result, items, "a2")).toBe(83);
+    // The lifted row's slot follows b1, ahead of the Working shelf.
+    expect(top(result, items, sidebarMarkerId("working-header")) - top(result, items, "b1")).toBe(
+      166,
+    );
+  });
+
+  it("pages settled rows by recency, then groups the visible page by project", () => {
+    // Committed recency b_s1, a_s1, am, a_s2 with a page of three keeps
+    // b_s1, a_s1, am and renders them as a_s1, am | b_s1.
+    const items = [
+      pinnedHeader,
+      divider,
+      thread("am", "active"),
+      settledHeader,
+      thread("a_s1", "settled"),
+      thread("a_s2", "settled"),
+      thread("b_s1", "settled"),
+    ];
+    const input = {
+      items,
+      settledOrder: ["b_s1", "a_s1", "am", "a_s2"],
+      settledExpanded: true,
+      settledVisibleCount: 3,
+    };
+    const grouped = preview({ ...input, projectGrouping }, "am", sidebarMarkerId("settled-header"));
+    expect(grouped.get("a_s2")?.scaleY).toBe(0);
+    expect(top(grouped, items, "b_s1") - top(grouped, items, "a_s1")).toBe(74);
+
+    // Without grouping the same page keeps its recency order.
+    const flat = preview(input, "am", sidebarMarkerId("settled-header"));
+    expect(top(flat, items, "a_s1") - top(flat, items, "b_s1")).toBe(37);
+  });
+
+  it("reserves a revealed settled row from an earlier project ahead of later projects", () => {
+    // Recency b_s1, b_s2, a_s3 with a page of two renders b_s1, b_s2. Moving
+    // b_s1 out reveals a_s3, which is not rendered yet; the final page is
+    // a_s3 | b_s2, so b_s2 sits one row below the header slot.
+    const items = [
+      pinnedHeader,
+      divider,
+      thread("a1", "active"),
+      settledHeader,
+      thread("b_s1", "settled"),
+      thread("b_s2", "settled"),
+    ];
+    const input = {
+      items,
+      settledOrder: ["b_s1", "b_s2", "a_s3"],
+      settledExpanded: true,
+      settledVisibleCount: 2,
+    };
+    const offset = (result: Map<string, ReturnType<SortingStrategy>>) =>
+      top(result, items, "b_s2") - top(result, items, sidebarMarkerId("settled-header"));
+    expect(offset(preview({ ...input, projectGrouping }, "b_s1", "a1"))).toBe(33 + 37);
+    // A lookup that only knows rendered rows files a_s3 under No project,
+    // behind b_s2, which is the mismatch the full lookup avoids.
+    const renderedOnly = {
+      ...projectGrouping,
+      projectKeyOf: (key: string) => (key === "a_s3" ? null : key[0]!),
+    };
+    expect(offset(preview({ ...input, projectGrouping: renderedOnly }, "b_s1", "a1"))).toBe(33);
+  });
+});

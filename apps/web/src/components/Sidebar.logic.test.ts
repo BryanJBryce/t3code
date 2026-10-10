@@ -55,6 +55,8 @@ import {
   shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
+  ungroupSidebarDropOrder,
+  sidebarListItemId,
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
@@ -2314,5 +2316,119 @@ describe("Working shelf (beta)", () => {
         unsnooze: false,
       });
     });
+  });
+});
+
+describe("project-grouped drops", () => {
+  // Flat order a1 < b1 < a2 by key; rendered grouped as A: a1, a2 / B: b1.
+  const projectOf = (key: string) => key[0]!;
+  const activeKeysById = new Map([
+    ["a1", "d"],
+    ["b1", "h"],
+    ["a2", "p"],
+  ]);
+  const items: SidebarListItem[] = [
+    { kind: "marker", marker: "pinned-header" },
+    { kind: "marker", marker: "pinned-divider" },
+    { kind: "marker", marker: "active-placeholder" },
+    { kind: "marker", marker: "project:active:a", label: "A" },
+    { kind: "thread", key: "a1", section: "active" },
+    { kind: "thread", key: "a2", section: "active" },
+    { kind: "marker", marker: "project:active:b", label: "B" },
+    { kind: "thread", key: "b1", section: "active" },
+    { kind: "marker", marker: "settled-header" },
+    { kind: "marker", marker: "settled-placeholder" },
+  ];
+  const planActiveDrop = (activeKey: string, overId: string) => {
+    const target = resolveSidebarDropTarget(items, activeKey, overId)!;
+    return planSidebarThreadDrop({
+      activeKey,
+      activeSection: "active",
+      target: {
+        ...target,
+        activeOrder: ungroupSidebarDropOrder({
+          groupedOrder: target.activeOrder,
+          flatOrder: ["a1", "b1", "a2"],
+          movedKey: activeKey,
+          projectKeyOf: projectOf,
+        }),
+      },
+      pinnedOrder: [],
+      pinnedKeysById: new Map(),
+      activeOrder: ["a1", "b1", "a2"],
+      activeKeysById,
+    });
+  };
+
+  it("never puts project headers into a drop order", () => {
+    expect(resolveSidebarDropTarget(items, "a2", "a1")?.activeOrder).toEqual(["a2", "a1", "b1"]);
+  });
+
+  it("reorders within a project with one key write that keeps other projects in place", () => {
+    const plan = planActiveDrop("a1", "a2");
+    expect(plan.kind).toBe("move-active");
+    if (plan.kind !== "move-active") return;
+    expect(plan.order).toEqual(["b1", "a2", "a1"]);
+    expect(plan.assignments).toHaveLength(1);
+    expect(plan.assignments[0]!.id).toBe("a1");
+    expect(plan.assignments[0]!.orderKey > "p").toBe(true);
+  });
+
+  it("keeps the flat order and writes nothing when a row drops onto itself", () => {
+    const target = resolveSidebarDropTarget(items, "a2", "a2")!;
+    expect(target.activeOrder).toEqual(["a1", "a2", "b1"]);
+    expect(
+      ungroupSidebarDropOrder({
+        groupedOrder: target.activeOrder,
+        flatOrder: ["a1", "b1", "a2"],
+        movedKey: "a2",
+        projectKeyOf: projectOf,
+      }),
+    ).toEqual(["a1", "b1", "a2"]);
+    expect(planActiveDrop("a2", "a2")).toEqual({ kind: "none" });
+  });
+
+  it("never turns a project header into a drop order entry", () => {
+    for (const over of items.map(sidebarListItemId)) {
+      const target = resolveSidebarDropTarget(items, "a1", over);
+      if (target === null) continue;
+      for (const key of [...target.pinnedOrder, ...target.activeOrder]) {
+        expect(["a1", "a2", "b1"]).toContain(key);
+      }
+    }
+  });
+
+  it("ignores a drop inside another project's run", () => {
+    expect(planActiveDrop("a2", "b1")).toEqual({ kind: "none" });
+  });
+
+  it("places a row entering a section next to its project", () => {
+    expect(
+      ungroupSidebarDropOrder({
+        groupedOrder: ["a1", "x1", "b1"],
+        flatOrder: ["b1", "a1"],
+        movedKey: "x1",
+        projectKeyOf: projectOf,
+      }),
+    ).toEqual(["x1", "b1", "a1"]);
+    expect(
+      ungroupSidebarDropOrder({
+        groupedOrder: ["a1", "a3", "b1"],
+        flatOrder: ["b1", "a1"],
+        movedKey: "a3",
+        projectKeyOf: projectOf,
+      }),
+    ).toEqual(["b1", "a1", "a3"]);
+  });
+
+  it("drops the moved row from a section it leaves", () => {
+    expect(
+      ungroupSidebarDropOrder({
+        groupedOrder: ["a1", "b1"],
+        flatOrder: ["a1", "a2", "b1"],
+        movedKey: "a2",
+        projectKeyOf: projectOf,
+      }),
+    ).toEqual(["a1", "b1"]);
   });
 });

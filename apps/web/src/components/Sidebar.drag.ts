@@ -1,6 +1,8 @@
 import { closestCenter, type CollisionDetection, type Modifier } from "@dnd-kit/core";
+import { groupThreadsByProject } from "@t3tools/client-runtime/state/thread-sort";
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
+  isSidebarProjectHeaderId,
   resolveSidebarDropTarget,
   sidebarListItemId,
   sidebarMarkerId,
@@ -44,7 +46,9 @@ export function createSidebarCollisionDetection(
   let previousPointerY = options.activationY;
   let boundarySection: "pinned" | "active" | undefined;
   return (args) => {
-    let collisions = closestCenter(args);
+    let collisions = closestCenter(args).filter(
+      (collision) => !isSidebarProjectHeaderId(String(collision.id)),
+    );
     const pointer = args.pointerCoordinates;
     const items = options.items;
     const source = items?.find((item) => item.kind === "thread" && item.key === args.active.id);
@@ -113,6 +117,12 @@ export function createSidebarSortingStrategy(input: {
   /** Space each pinned boundary opens for its label while dragging. The
    * markers stay zero height at rest, so nothing is reserved until pickup. */
   boundaryLabelHeight?: number;
+  /** While the list is grouped by project: the same project runs the list
+   * renders, applied after ordering and settled paging pick the rows. */
+  projectGrouping?: {
+    projectKeyOf: (threadKey: string) => string | null | undefined;
+    rank: ReadonlyMap<string, number>;
+  } | null;
 }): SortingStrategy {
   if (input.enabled === false) return () => stationary;
   const { items } = input;
@@ -168,6 +178,25 @@ export function createSidebarSortingStrategy(input: {
       (item) => (ranks.get(item.key) ?? Number.POSITIVE_INFINITY) > rank,
     );
     group.splice(index < 0 ? group.length : index, 0, { ...active, section: target.section });
+    const grouping = input.projectGrouping ?? null;
+    const regroup = (rows: ThreadItem[]) =>
+      grouping === null
+        ? rows
+        : groupThreadsByProject(
+            rows,
+            (item) => grouping.projectKeyOf(item.key),
+            grouping.rank,
+          ).flatMap((run) => [...run.threads]);
+    if (grouping !== null) {
+      // Rows of other projects can sit between ranked neighbors, so place the
+      // lifted row by its full order before regrouping.
+      group.sort(
+        (left, right) =>
+          (ranks.get(left.key) ?? Number.POSITIVE_INFINITY) -
+          (ranks.get(right.key) ?? Number.POSITIVE_INFINITY),
+      );
+      groups[target.section] = regroup(group);
+    }
     const settledOrder = (
       input.settledOrder.length > 0 ? input.settledOrder : groups.settled.map((item) => item.key)
     ).filter((key) => key !== active.key || target.section === "settled");
@@ -178,7 +207,9 @@ export function createSidebarSortingStrategy(input: {
     if (routeKey && settledOrder.includes(routeKey) && !visible.includes(routeKey)) {
       visible.push(routeKey);
     }
-    groups.settled = visible.map((key) => ({ kind: "thread", key, section: "settled" }));
+    groups.settled = regroup(
+      visible.map((key): ThreadItem => ({ kind: "thread", key, section: "settled" })),
+    );
     const projected: SidebarListItem[] = [];
     const marker = (name: SidebarListMarker) => projected.push({ kind: "marker", marker: name });
     const section = (name: "active" | "settled") => {

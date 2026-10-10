@@ -26,6 +26,7 @@ import {
 import {
   createPendingThreadOrder,
   createThreadMovePlanner,
+  resolveGroupedThreadMove,
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
@@ -261,6 +262,7 @@ export function useThreadListActions(): {
   readonly moveThread: (
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
+    groupOf?: ((thread: EnvironmentThreadShell) => string | undefined) | null,
   ) => Promise<boolean>;
   readonly renameThread: (thread: EnvironmentThreadShell) => void;
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -586,7 +588,13 @@ export function useThreadListActions(): {
     reportFailure: false,
   });
   const moveThread = useCallback(
-    async (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
+    async (
+      thread: EnvironmentThreadShell,
+      requestedDirection: ThreadMoveDestination,
+      /** The rendered list's project grouping; up/down then step within a project. */
+      groupOf?: ((thread: EnvironmentThreadShell) => string | undefined) | null,
+    ) => {
+      let direction = requestedDirection;
       if (!checkThreadOperationPermission(thread, "Could not move thread")) return false;
       if (getPendingThreadOrder() !== null || appAtomRegistry.get(threadDropBusyAtom)) return false;
       const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
@@ -640,6 +648,16 @@ export function useThreadListActions(): {
           ),
         ),
       });
+      if (typeof direction === "string" && groupOf) {
+        const grouped = resolveGroupedThreadMove({
+          ordered,
+          movedId: scopedThreadKey(thread.environmentId, thread.id),
+          direction,
+          groupOf,
+        });
+        if (grouped === null) return false;
+        direction = grouped;
+      }
       const assignments = createThreadMovePlanner({
         allThreads: shells,
         ordered,

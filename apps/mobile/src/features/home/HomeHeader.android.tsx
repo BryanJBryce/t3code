@@ -11,9 +11,8 @@ function checkedMenuState(checked: boolean) {
 }
 
 export function HomeHeader(props: HomeHeaderProps) {
-  // The list uses a fixed creation order and ignores sort/group options, so
-  // the filter menu only carries the filters and the "customized" icon state
-  // keys off those alone.
+  // Grouping is a saved preference, so the "customized" icon state keys off
+  // the filters alone.
   const hasCustomListOptions =
     props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
   const menuActions = useMemo<MenuAction[]>(
@@ -53,9 +52,25 @@ export function HomeHeader(props: HomeHeaderProps) {
                 })),
               ],
             },
+            ...(props.onToggleGroupedByProject
+              ? [
+                  {
+                    id: "group-by-project",
+                    title: "Group by project",
+                    state: checkedMenuState(props.groupedByProject === true),
+                  },
+                ]
+              : []),
           ] satisfies MenuAction[])),
     ],
-    [props.environments, props.projects, props.selectedEnvironmentId, props.selectedProjectKey],
+    [
+      props.environments,
+      props.groupedByProject,
+      props.onToggleGroupedByProject,
+      props.projects,
+      props.selectedEnvironmentId,
+      props.selectedProjectKey,
+    ],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
@@ -73,6 +88,11 @@ export function HomeHeader(props: HomeHeaderProps) {
         if (environment) {
           props.onEnvironmentChange(environment.environmentId);
         }
+        return;
+      }
+
+      if (id === "group-by-project") {
+        props.onToggleGroupedByProject?.();
         return;
       }
 

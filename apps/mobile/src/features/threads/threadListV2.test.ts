@@ -32,6 +32,7 @@ import {
   buildThreadListV2ListItems,
   getThreadListV2OrderedSection,
   isThreadListV2ListItem,
+  resolveThreadListV2ProjectGroupOf,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
@@ -2435,5 +2436,150 @@ describe("Working section beta", () => {
       "v2-settled-shelf",
       "settled",
     ]);
+  });
+});
+
+describe("buildThreadListV2Items grouped by project", () => {
+  const projectA = ProjectId.make("project-a");
+  const projectB = ProjectId.make("project-b");
+  const threads = [
+    makeThread({ id: ThreadId.make("a1"), title: "a1", projectId: projectA }),
+    makeThread({ id: ThreadId.make("b1"), title: "b1", projectId: projectB }),
+    makeThread({ id: ThreadId.make("orphan"), title: "orphan", projectId: ProjectId.make("gone") }),
+    makeThread({ id: ThreadId.make("a2"), title: "a2", projectId: projectA }),
+    makeThread({
+      id: ThreadId.make("settled-a"),
+      title: "settled-a",
+      projectId: projectA,
+      settledOverride: "settled",
+      settledAt: NOW,
+    }),
+  ];
+  // Project B first: groups follow the given project order, not the threads.
+  const projectGroups = [
+    { key: "repo-b", title: "Repo B", projectRefs: [{ environmentId, projectId: projectB }] },
+    { key: "repo-a", title: "Repo A", projectRefs: [{ environmentId, projectId: projectA }] },
+  ];
+  const build = (searchQuery = "") => {
+    const layout = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery,
+      now: NOW,
+      projectGroups,
+    });
+    return buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [makePendingTask("queued")],
+      settledCount: layout.settledCount,
+      settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+    });
+  };
+  const labels = (items: ReadonlyArray<ThreadListV2ListItem>) =>
+    items.map((item) =>
+      item.type === "v2-project-header"
+        ? `# ${item.title}`
+        : item.type === "v2-thread"
+          ? item.item.thread.id
+          : item.type,
+    );
+  const flatActive = buildThreadListV2Items({
+    threads,
+    environmentId: null,
+    searchQuery: "",
+    now: NOW,
+  })
+    .items.filter((item) => item.thread.settledOverride !== "settled")
+    .map((item) => item.thread.id);
+
+  it("nests each section under project headers without dropping or duplicating rows", () => {
+    const projectOf = (id: string) => (id.startsWith("a") ? 1 : id.startsWith("b") ? 0 : 2);
+    const groupedActive = [...flatActive].sort((left, right) => projectOf(left) - projectOf(right));
+    expect(labels(build())).toEqual([
+      "# Repo B",
+      ...groupedActive.filter((id) => projectOf(id) === 0),
+      "# Repo A",
+      ...groupedActive.filter((id) => projectOf(id) === 1),
+      "# No project",
+      "orphan",
+      "v2-pending",
+      "v2-settled-shelf",
+      "# Repo A",
+      "settled-a",
+    ]);
+  });
+
+  it("keys headers per section so recycled cells stay stable", () => {
+    const keys = build()
+      .filter((item) => item.type === "v2-project-header")
+      .map((item) => item.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    const [first] = build();
+    const [again] = build();
+    expect(threadListV2ListItemsAreEqual(first!, again!)).toBe(true);
+    expect(
+      first!.type === "v2-project-header" &&
+        threadListV2ListItemsAreEqual(first!, { ...first!, title: "Renamed" }),
+    ).toBe(false);
+  });
+
+  it("stays flat while searching", () => {
+    expect(build("a").some((item) => item.type === "v2-project-header")).toBe(false);
+  });
+
+  it("stays flat without project groups", () => {
+    const layout = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    expect(layout.items.some((item) => item.projectHeader !== undefined)).toBe(false);
+  });
+});
+
+describe("resolveThreadListV2ProjectGroupOf", () => {
+  const otherEnvironment = EnvironmentId.make("environment-2");
+  const repo = ProjectId.make("repo");
+  const repoCopy = ProjectId.make("repo-copy");
+  const projectGroups = [
+    {
+      key: "repository",
+      title: "Repository",
+      projectRefs: [
+        { environmentId, projectId: repo },
+        { environmentId: otherEnvironment, projectId: repoCopy },
+      ],
+    },
+  ];
+
+  it("gives a logical repository one group across environments", () => {
+    const groupOf = resolveThreadListV2ProjectGroupOf({
+      projectGroups,
+      environmentId: null,
+      searchQuery: "",
+    })!;
+    expect(groupOf({ environmentId, projectId: repo })).toBe("repository");
+    expect(groupOf({ environmentId: otherEnvironment, projectId: repoCopy })).toBe("repository");
+    expect(groupOf({ environmentId, projectId: ProjectId.make("unknown") })).toBe("");
+  });
+
+  it("hides rows outside the environment filter and turns off while searching", () => {
+    const filtered = resolveThreadListV2ProjectGroupOf({
+      projectGroups,
+      environmentId,
+      searchQuery: "",
+    })!;
+    expect(filtered({ environmentId: otherEnvironment, projectId: repoCopy })).toBeUndefined();
+    expect(
+      resolveThreadListV2ProjectGroupOf({ projectGroups, environmentId: null, searchQuery: " x " }),
+    ).toBeNull();
+    expect(
+      resolveThreadListV2ProjectGroupOf({
+        projectGroups: null,
+        environmentId: null,
+        searchQuery: "",
+      }),
+    ).toBeNull();
   });
 });

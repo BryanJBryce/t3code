@@ -51,6 +51,7 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2SectionDivider,
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
@@ -61,6 +62,7 @@ import {
   buildThreadListV2Items,
   getThreadListV2OrderedSection,
   buildThreadListV2ListItems,
+  resolveThreadListV2ProjectGroupOf,
   threadListV2ListItemsAreEqual,
   threadListInboxReturns,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
@@ -72,6 +74,7 @@ import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import {
   buildHomeProjectScopes,
   findHomeProjectScope,
+  sortHomeProjectScopes,
   type HomeProjectSortOrder,
 } from "./homeThreadList";
 import { createSwipeRowActivation } from "./swipe-row-activation";
@@ -120,6 +123,7 @@ interface HomeScreenProps {
   readonly onMoveThread: (
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
+    groupOf?: ((thread: EnvironmentThreadShell) => string | undefined) | null,
   ) => Promise<boolean>;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -449,12 +453,6 @@ export function HomeScreen(props: HomeScreenProps) {
     },
     [props.onPinThread],
   );
-  const handleMoveThread = useCallback(
-    (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
-      void props.onMoveThread(thread, direction);
-    },
-    [props.onMoveThread],
-  );
   const handleUnpinThread = useCallback(
     (thread: EnvironmentThreadShell) => {
       void props.onUnpinThread(thread);
@@ -500,10 +498,47 @@ export function HomeScreen(props: HomeScreenProps) {
     snoozedShelfExpanded,
     workingShelfEnabled,
     workingShelfExpanded,
+    groupedByProject,
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
   } = useThreadListV2ShelfPreferences();
+  // Grouping follows the list's project order. A scoped list is one project.
+  const threadListProjectGroups = useMemo(
+    () =>
+      groupedByProject && v2ScopedProjectGroup === null
+        ? sortHomeProjectScopes({
+            scopes: projectScopes,
+            threads: props.threads,
+            pendingTasks: props.pendingTasks,
+            projectSortOrder: props.projectSortOrder,
+          })
+        : null,
+    [
+      groupedByProject,
+      projectScopes,
+      props.pendingTasks,
+      props.projectSortOrder,
+      props.threads,
+      v2ScopedProjectGroup,
+    ],
+  );
+  // Move up/down follows the rendered grouping.
+  const threadListGroupOf = useMemo(
+    () =>
+      resolveThreadListV2ProjectGroupOf({
+        projectGroups: threadListProjectGroups,
+        environmentId: props.selectedEnvironmentId,
+        searchQuery: props.searchQuery,
+      }),
+    [props.searchQuery, props.selectedEnvironmentId, threadListProjectGroups],
+  );
+  const handleMoveThread = useCallback(
+    (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
+      void props.onMoveThread(thread, direction, threadListGroupOf);
+    },
+    [props.onMoveThread, threadListGroupOf],
+  );
   // The queued-start and snooze helpers need a clock while the list stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -554,6 +589,7 @@ export function HomeScreen(props: HomeScreenProps) {
           snoozeEnvironmentIds,
           queuedThreadKeys,
         }),
+        groupOf: threadListGroupOf,
       });
     // The Working beta orders the inbox by time, so only pins can move.
     return new Map([
@@ -561,6 +597,7 @@ export function HomeScreen(props: HomeScreenProps) {
       ...(workingShelfEnabled ? [] : sectionAvailability("active")),
     ]);
   }, [
+    threadListGroupOf,
     workingShelfEnabled,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
@@ -594,8 +631,10 @@ export function HomeScreen(props: HomeScreenProps) {
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey,
+      projectGroups: threadListProjectGroups,
     });
   }, [
+    threadListProjectGroups,
     workingShelfEnabled,
     workingShelfExpanded,
     pendingOrder,
@@ -710,6 +749,14 @@ export function HomeScreen(props: HomeScreenProps) {
             showTrailingDivider={item.showTrailingDivider}
             onSelectPendingTask={props.onSelectPendingTask}
             onDeletePendingTask={props.onDeletePendingTask}
+          />
+        );
+      }
+      if (item.type === "v2-project-header") {
+        return (
+          <ThreadListV2SectionDivider
+            label={item.title}
+            pane={primaryColumn ? "sidebar" : "screen"}
           />
         );
       }

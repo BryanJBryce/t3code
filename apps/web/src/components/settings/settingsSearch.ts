@@ -318,6 +318,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sort projects sidebar manual created recent"],
   },
   {
+    id: "group-threads-by-project",
+    title: "Group threads by project",
+    to: "/settings/general",
+    searchTerms: ["sidebar threads project headers nest organize"],
+  },
+  {
     id: "snooze-limited-threads",
     title: "Snooze limited threads",
     to: "/settings/general",

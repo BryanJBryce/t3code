@@ -21,12 +21,15 @@ export function useThreadListV2ShelfPreferences() {
   const workingShelfEnabled = loaded && preferencesResult.value.workingShelfEnabled === true;
   const workingShelfExpanded =
     loaded && preferencesResult.value.threadListWorkingShelfExpanded === true;
+  const groupedByProject = loaded && preferencesResult.value.threadListGroupedByProject === true;
   const snoozedShelfExpandedRef = useRef(snoozedShelfExpanded);
   const settledShelfExpandedRef = useRef(settledShelfExpanded);
   const workingShelfExpandedRef = useRef(workingShelfExpanded);
+  const groupedByProjectRef = useRef(groupedByProject);
   snoozedShelfExpandedRef.current = snoozedShelfExpanded;
   settledShelfExpandedRef.current = settledShelfExpanded;
   workingShelfExpandedRef.current = workingShelfExpanded;
+  groupedByProjectRef.current = groupedByProject;
 
   const toggleSnoozedShelf = useCallback(() => {
     if (!loaded) return;
@@ -47,8 +50,16 @@ export function useThreadListV2ShelfPreferences() {
     savePreferences({ threadListWorkingShelfExpanded: expanded });
   }, [loaded, savePreferences]);
 
+  const toggleGroupedByProject = useCallback(() => {
+    if (!loaded) return;
+    const grouped = !groupedByProjectRef.current;
+    groupedByProjectRef.current = grouped;
+    savePreferences({ threadListGroupedByProject: grouped });
+  }, [loaded, savePreferences]);
+
   return {
     loaded,
+    groupedByProject,
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
@@ -56,5 +67,6 @@ export function useThreadListV2ShelfPreferences() {
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
+    toggleGroupedByProject,
   } as const;
 }

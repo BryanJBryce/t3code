@@ -398,3 +398,35 @@ export function planPinnedMove(input: {
   newOrder.splice(to, 0, movedId);
   return planPinnedReorder({ orderedIds: newOrder, keysById, movedId });
 }
+
+export interface ThreadProjectGroup<T> {
+  /** Logical project key, or null for threads whose project is not listed. */
+  readonly projectKey: string | null;
+  readonly threads: readonly T[];
+}
+
+/**
+ * Splits an already-ordered thread list into one run per project. Runs follow
+ * `projectRank` (logical project key -> position); threads keep their input
+ * order inside a run. Threads whose project is missing from `projectRank`
+ * collect in a trailing `projectKey: null` run, so nothing is dropped.
+ */
+export function groupThreadsByProject<T>(
+  threads: readonly T[],
+  projectKeyOf: (thread: T) => string | null | undefined,
+  projectRank: ReadonlyMap<string, number>,
+): ThreadProjectGroup<T>[] {
+  const buckets = new Map<string | null, T[]>();
+  for (const thread of threads) {
+    const candidate = projectKeyOf(thread);
+    const key = candidate != null && projectRank.has(candidate) ? candidate : null;
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(thread);
+    else buckets.set(key, [thread]);
+  }
+  const rank = (key: string | null) =>
+    key === null ? Number.POSITIVE_INFINITY : projectRank.get(key)!;
+  return [...buckets]
+    .sort(([left], [right]) => rank(left) - rank(right))
+    .map(([projectKey, grouped]) => ({ projectKey, threads: grouped }));
+}

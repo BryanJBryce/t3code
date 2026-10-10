@@ -12,6 +12,7 @@ import {
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
+import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 
 const GROUPING_OPTIONS: ReadonlyArray<{
   readonly mode: SidebarProjectGroupingMode;
@@ -43,6 +44,9 @@ export function SettingsProjectGroupingRouteScreen() {
   const selectedMode = AsyncResult.isSuccess(preferencesResult)
     ? resolveMobileProjectGroupingSettings(preferencesResult.value).sidebarProjectGroupingMode
     : null;
+  const threadsGroupedByProject =
+    AsyncResult.isSuccess(preferencesResult) &&
+    preferencesResult.value.threadListGroupedByProject === true;
 
   return (
     <SettingsScreen title="Organization">
@@ -65,6 +69,15 @@ export function SettingsProjectGroupingRouteScreen() {
               onPress={() => savePreferences(mobileProjectGroupingModePatch(option.mode))}
             />
           ))}
+        </SettingsSection>
+        <SettingsSection title="Threads">
+          <SettingsSwitchRow
+            icon="folder"
+            label="Group threads by project"
+            value={threadsGroupedByProject}
+            disabled={!preferencesReady}
+            onValueChange={(value) => savePreferences({ threadListGroupedByProject: value })}
+          />
         </SettingsSection>
       </ScrollView>
     </SettingsScreen>

@@ -643,6 +643,17 @@ describe("ClientSettings sidebar", () => {
     );
   });
 
+  it("keeps thread grouping by project opt-in and patchable", () => {
+    expect(decodeClientSettings({}).sidebarThreadsGroupedByProject).toBe(false);
+    expect(
+      decodeClientSettings({ sidebarThreadsGroupedByProject: true }).sidebarThreadsGroupedByProject,
+    ).toBe(true);
+    expect(
+      decodeClientSettingsPatch({ sidebarThreadsGroupedByProject: true })
+        .sidebarThreadsGroupedByProject,
+    ).toBe(true);
+  });
+
   it("keeps unpin confirmation opt-in and patchable", () => {
     expect(decodeClientSettings({}).confirmThreadUnpin).toBe(false);
     expect(decodeClientSettingsPatch({ confirmThreadUnpin: true }).confirmThreadUnpin).toBe(true);

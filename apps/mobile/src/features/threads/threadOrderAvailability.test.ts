@@ -8,6 +8,8 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import {
   computeThreadMoveAvailability,
   createThreadMovePlanner,
+  resolveGroupedThreadMove,
+  threadOrderAfterMove,
   type OrderRow,
 } from "./threadOrder";
 
@@ -289,5 +291,152 @@ describe("computeThreadMoveAvailability matches the reference planner", () => {
     });
     const reference = referenceAvailability(rows, rows, WRITABLE);
     expect(Object.fromEntries(batch)).toEqual(Object.fromEntries(reference));
+  });
+});
+
+describe("grouped up/down", () => {
+  const rowKey = (row: OrderRow) => `${row.environmentId}:${row.id}`;
+  const planGrouped = (
+    ordered: readonly OrderRow[],
+    allThreads: readonly OrderRow[],
+    groupOf: (row: OrderRow) => string | undefined,
+    movedId: string,
+    direction: "up" | "down",
+  ) => {
+    const destination = resolveGroupedThreadMove({ ordered, movedId, direction, groupOf });
+    if (destination === null) return null;
+    const planner = createThreadMovePlanner({
+      ordered,
+      allThreads,
+      section: "pinned",
+      reorderableEnvironmentIds: WRITABLE,
+    });
+    const assignments = planner(movedId, destination);
+    return assignments === null
+      ? null
+      : {
+          order: threadOrderAfterMove(ordered.map(rowKey), movedId, destination),
+          assignments,
+        };
+  };
+
+  it("matches the reference planner across randomized grouped sections", () => {
+    const GROUPS = ["a", "b", undefined] as const;
+    for (let seed = 1; seed <= 3_000; seed += 1) {
+      const rng = makeRng(seed);
+      const { ordered, allThreads } = randomCase(rng);
+      const groupById = new Map(
+        ordered.map((row) => [rowKey(row), GROUPS[Math.floor(rng() * GROUPS.length)]]),
+      );
+      const groupOf = (row: OrderRow) => groupById.get(rowKey(row));
+      const batch = computeThreadMoveAvailability({
+        ordered,
+        allThreads,
+        section: "pinned",
+        reorderableEnvironmentIds: WRITABLE,
+        groupOf,
+      });
+      for (const row of ordered) {
+        const id = rowKey(row);
+        expect(
+          batch.get(id) ?? { canMoveUp: false, canMoveDown: false },
+          `seed ${seed} ${id}`,
+        ).toEqual({
+          canMoveUp: planGrouped(ordered, allThreads, groupOf, id, "up") !== null,
+          canMoveDown: planGrouped(ordered, allThreads, groupOf, id, "down") !== null,
+        });
+      }
+    }
+  });
+
+  // Flat a1, b1, a2 renders grouped as a1, a2 | b1.
+  const interleaved = [
+    makeRow("a1", "env-w", "c", true),
+    makeRow("b1", "env-w", "g", true),
+    makeRow("a2", "env-w", "m", true),
+  ];
+  const physical = (row: OrderRow) => (row.id.startsWith("a") ? "project-a" : "project-b");
+
+  it("steps over other projects and writes only the moved row's key", () => {
+    const down = planGrouped(interleaved, interleaved, physical, "env-w:a1", "down")!;
+    expect(down.order).toEqual(["env-w:b1", "env-w:a2", "env-w:a1"]);
+    expect(down.assignments).toHaveLength(1);
+    expect(down.assignments[0]!.id).toBe("env-w:a1");
+    expect(down.assignments[0]!.orderKey > "m").toBe(true);
+
+    const up = planGrouped(interleaved, interleaved, physical, "env-w:a2", "up")!;
+    expect(up.order).toEqual(["env-w:a2", "env-w:a1", "env-w:b1"]);
+    expect(up.assignments).toEqual([{ id: "env-w:a2", orderKey: expect.any(String) }]);
+    expect(up.assignments[0]!.orderKey < "c").toBe(true);
+  });
+
+  it("stops at the edges of each project run", () => {
+    const batch = computeThreadMoveAvailability({
+      ordered: interleaved,
+      section: "pinned",
+      reorderableEnvironmentIds: WRITABLE,
+      groupOf: physical,
+    });
+    expect(batch.get("env-w:a1")).toEqual({ canMoveUp: false, canMoveDown: true });
+    expect(batch.get("env-w:a2")).toEqual({ canMoveUp: true, canMoveDown: false });
+    // b1 is alone in its project even though rows sit on both sides of it.
+    expect(batch.get("env-w:b1")).toEqual({ canMoveUp: false, canMoveDown: false });
+    expect(
+      resolveGroupedThreadMove({
+        ordered: interleaved,
+        movedId: "env-w:b1",
+        direction: "up",
+        groupOf: physical,
+      }),
+    ).toBeNull();
+  });
+
+  it("treats one repository across environments as one run", () => {
+    const rows = [
+      makeRow("r1", "env-w", "c", true),
+      makeRow("other", "env-w", "g", true),
+      makeRow("r2", "env-w2", "m", true),
+    ];
+    const writable = new Set<EnvironmentId>(["env-w", "env-w2"] as EnvironmentId[]);
+    const repository = (row: OrderRow) => (row.id === "other" ? "other" : "repo");
+    const batch = computeThreadMoveAvailability({
+      ordered: rows,
+      section: "pinned",
+      reorderableEnvironmentIds: writable,
+      groupOf: repository,
+    });
+    expect(batch.get("env-w:r1")).toEqual({ canMoveUp: false, canMoveDown: true });
+    expect(batch.get("env-w2:r2")).toEqual({ canMoveUp: true, canMoveDown: false });
+    expect(
+      resolveGroupedThreadMove({
+        ordered: rows,
+        movedId: "env-w:r1",
+        direction: "down",
+        groupOf: repository,
+      }),
+    ).toEqual({ targetId: "env-w2:r2", placement: "after" });
+  });
+
+  it("ignores rows the list hides", () => {
+    // An environment filter hides b1; a1 and a2 are still neighbors.
+    const shown = (row: OrderRow) => (row.id === "b1" ? undefined : physical(row));
+    expect(
+      resolveGroupedThreadMove({
+        ordered: interleaved,
+        movedId: "env-w:a1",
+        direction: "down",
+        groupOf: shown,
+      }),
+    ).toEqual({ targetId: "env-w:a2", placement: "after" });
+  });
+
+  it("keeps flat neighbors while grouping is off", () => {
+    const batch = computeThreadMoveAvailability({
+      ordered: interleaved,
+      section: "pinned",
+      reorderableEnvironmentIds: WRITABLE,
+      groupOf: null,
+    });
+    expect(batch.get("env-w:b1")).toEqual({ canMoveUp: true, canMoveDown: true });
   });
 });

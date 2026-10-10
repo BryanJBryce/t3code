@@ -36,6 +36,8 @@ export function buildHomeListFilterMenu(props: {
   readonly selectedProjectKey: string | null;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  readonly groupedByProject?: boolean;
+  readonly onToggleGroupedByProject?: () => void;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
 
@@ -81,6 +83,15 @@ export function buildHomeListFilterMenu(props: {
           onPress: () => props.onProjectChange(project.key),
         })),
       ],
+    });
+  }
+
+  if (props.onToggleGroupedByProject && props.projects.length > 0) {
+    items.push({
+      type: "action",
+      title: "Group by project",
+      state: props.groupedByProject === true ? "on" : "off",
+      onPress: props.onToggleGroupedByProject,
     });
   }
 

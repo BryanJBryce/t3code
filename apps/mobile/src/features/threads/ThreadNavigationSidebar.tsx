@@ -1,6 +1,6 @@
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { computeThreadMoveAvailability } from "./threadOrder";
+import { computeThreadMoveAvailability, type ThreadMoveDestination } from "./threadOrder";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -40,7 +40,7 @@ import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
-import { buildHomeProjectScopes } from "../home/homeThreadList";
+import { buildHomeProjectScopes, sortHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
 import { useThreadListActions } from "../home/useThreadListActions";
@@ -58,6 +58,7 @@ import { SidebarNavigationShell } from "./sidebar-navigation-shell";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2SectionDivider,
   ThreadListV2SettledShelfHeader,
   ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
@@ -69,6 +70,7 @@ import {
   getThreadListV2OrderedSection,
   buildThreadListV2ListItems,
   isThreadListV2ListItem,
+  resolveThreadListV2ProjectGroupOf,
   threadListV2ListItemsAreEqual,
   threadListInboxReturns,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
@@ -295,10 +297,47 @@ function ThreadNavigationSidebarPane(
     snoozedShelfExpanded,
     workingShelfEnabled,
     workingShelfExpanded,
+    groupedByProject,
     toggleSettledShelf,
     toggleSnoozedShelf,
     toggleWorkingShelf,
+    toggleGroupedByProject,
   } = useThreadListV2ShelfPreferences();
+  // Grouping follows the list's project order. A scoped list is one project.
+  const threadListProjectGroups = useMemo(
+    () =>
+      groupedByProject && selectedProjectScope === null
+        ? sortHomeProjectScopes({
+            scopes: projectScopes,
+            threads,
+            pendingTasks,
+            projectSortOrder: options.projectSortOrder,
+          })
+        : null,
+    [
+      groupedByProject,
+      options.projectSortOrder,
+      pendingTasks,
+      projectScopes,
+      selectedProjectScope,
+      threads,
+    ],
+  );
+  // Move up/down follows the rendered grouping.
+  const threadListGroupOf = useMemo(
+    () =>
+      resolveThreadListV2ProjectGroupOf({
+        projectGroups: threadListProjectGroups,
+        environmentId: options.selectedEnvironmentId,
+        searchQuery: props.searchQuery,
+      }),
+    [options.selectedEnvironmentId, props.searchQuery, threadListProjectGroups],
+  );
+  const moveThreadInList = useCallback(
+    (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) =>
+      void moveThread(thread, direction, threadListGroupOf),
+    [moveThread, threadListGroupOf],
+  );
   // The queued-start and snooze helpers need a clock while the pane stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -347,6 +386,7 @@ function ThreadNavigationSidebarPane(
           snoozeEnvironmentIds,
           queuedThreadKeys,
         }),
+        groupOf: threadListGroupOf,
       });
     // The Working beta orders the inbox by time, so only pins can move.
     return new Map([
@@ -354,6 +394,7 @@ function ThreadNavigationSidebarPane(
       ...(workingShelfEnabled ? [] : sectionAvailability("active")),
     ]);
   }, [
+    threadListGroupOf,
     workingShelfEnabled,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
@@ -385,8 +426,10 @@ function ThreadNavigationSidebarPane(
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey: props.selectedThreadKey ?? null,
+      projectGroups: threadListProjectGroups,
     });
   }, [
+    threadListProjectGroups,
     workingShelfEnabled,
     workingShelfExpanded,
     pendingOrder,
@@ -520,9 +563,14 @@ function ThreadNavigationSidebarPane(
                 })),
               ],
             },
+            {
+              id: "group-by-project",
+              title: "Group by project",
+              state: groupedByProject ? "on" : "off",
+            },
           ] satisfies MenuAction[])),
     ],
-    [environments, options, projectFilterOptions, selectedProjectKey],
+    [environments, groupedByProject, options, projectFilterOptions, selectedProjectKey],
   );
   const handleListMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
@@ -538,6 +586,10 @@ function ThreadNavigationSidebarPane(
         if (environment) setSelectedEnvironmentId(environment.environmentId);
         return;
       }
+      if (event === "group-by-project") {
+        toggleGroupedByProject();
+        return;
+      }
       if (event === "project:all") {
         setSelectedProjectKey(null);
         return;
@@ -550,7 +602,7 @@ function ThreadNavigationSidebarPane(
         return;
       }
     },
-    [environments, projectFilterOptions, setSelectedEnvironmentId],
+    [environments, projectFilterOptions, setSelectedEnvironmentId, toggleGroupedByProject],
   );
 
   const [measuredHeaderHeight, setMeasuredHeaderHeight] = useState<number | null>(null);
@@ -745,7 +797,7 @@ function ThreadNavigationSidebarPane(
               onPinThread={pinThread}
               onUnpinThread={unpinThread}
               onSetThreadAutoSettle={setThreadAutoSettle}
-              onMoveThread={moveThread}
+              onMoveThread={moveThreadInList}
               onSwipeableClose={handleSwipeableClose}
               onSwipeableWillOpen={handleSwipeableWillOpen}
               simultaneousSwipeGesture={sidebarScrollGesture}
@@ -762,6 +814,8 @@ function ThreadNavigationSidebarPane(
               pane="sidebar"
             />
           );
+        case "v2-project-header":
+          return <ThreadListV2SectionDivider label={item.title} pane="sidebar" />;
         case "v2-snoozed-shelf":
           return (
             <ThreadListV2SnoozedShelfHeader
@@ -801,7 +855,7 @@ function ThreadNavigationSidebarPane(
       handleSwipeableClose,
       handleSwipeableWillOpen,
       machineByEnvironmentId,
-      moveThread,
+      moveThreadInList,
       openPendingTask,
       pinReorderEnvironmentIds,
       pinThread,
@@ -837,8 +891,8 @@ function ThreadNavigationSidebarPane(
       workingShelfEnabled,
     ],
   );
-  // The list ignores sort/group options, so only the environment and project
-  // filters can light the "customized" state.
+  // Grouping is a saved preference, so only the environment and project
+  // filters light the "customized" state.
   const filterCustomized = options.selectedEnvironmentId !== null || selectedProjectKey !== null;
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
@@ -852,8 +906,18 @@ function ThreadNavigationSidebarPane(
         selectedProjectKey,
         onEnvironmentChange: setSelectedEnvironmentId,
         onProjectChange: setSelectedProjectKey,
+        groupedByProject,
+        onToggleGroupedByProject: toggleGroupedByProject,
       }),
-    [environments, options, projectFilterOptions, selectedProjectKey, setSelectedEnvironmentId],
+    [
+      environments,
+      groupedByProject,
+      options,
+      projectFilterOptions,
+      selectedProjectKey,
+      setSelectedEnvironmentId,
+      toggleGroupedByProject,
+    ],
   );
   const nativeHeaderItems = useMemo(
     () =>

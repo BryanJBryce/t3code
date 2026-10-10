@@ -18,6 +18,7 @@ import {
   sortWorkingThreadsBySend,
 } from "@t3tools/client-runtime/state/thread-inbox";
 import {
+  groupThreadsByProject,
   sortActiveThreadsByOrderKey,
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
@@ -276,6 +277,8 @@ export interface ThreadListV2Item {
   /** Pinned-block row: renders the pin glyph and offers Unpin. */
   readonly pinned: boolean;
   readonly isLast: boolean;
+  /** First row of a project's run while the list is grouped by project. */
+  readonly projectHeader?: { readonly key: string; readonly title: string };
 }
 
 export interface ThreadListV2Layout {
@@ -342,6 +345,12 @@ export interface ThreadListV2PendingListItem {
   readonly showTrailingDivider: boolean;
 }
 
+export interface ThreadListV2ProjectHeaderListItem {
+  readonly type: "v2-project-header";
+  readonly key: string;
+  readonly title: string;
+}
+
 export interface ThreadListV2WorkingShelfListItem {
   readonly type: "v2-working-shelf";
   readonly key: "v2-working-shelf";
@@ -375,6 +384,7 @@ export interface ThreadListV2SettledShelfListItem {
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
+  | ThreadListV2ProjectHeaderListItem
   | ThreadListV2WorkingShelfListItem
   | ThreadListV2SnoozedShelfListItem
   | ThreadListV2SettledShelfListItem;
@@ -387,6 +397,7 @@ export function isThreadListV2ListItem(value: {
   return (
     value.type === "v2-thread" ||
     value.type === "v2-pending" ||
+    value.type === "v2-project-header" ||
     value.type === "v2-working-shelf" ||
     value.type === "v2-snoozed-shelf" ||
     value.type === "v2-settled-shelf"
@@ -428,6 +439,12 @@ export function threadListV2ListItemsAreEqual(
         previous.pendingTask === item.pendingTask &&
         previous.showPendingDivider === item.showPendingDivider &&
         previous.showTrailingDivider === item.showTrailingDivider
+      );
+    case "v2-project-header":
+      return (
+        previous.type === "v2-project-header" &&
+        previous.key === item.key &&
+        previous.title === item.title
       );
     case "v2-working-shelf":
       return (
@@ -548,6 +565,18 @@ export function buildThreadListV2ListItems(input: {
       canMoveDown: move?.canMoveDown === true,
     };
   });
+  // Project headers ride on the first row of each run, so the shelf indexes
+  // above keep addressing rows.
+  const rowsBetween = (start: number, end?: number): ThreadListV2ListItem[] =>
+    threadItems.slice(start, end).flatMap((entry, offset) => {
+      const header = input.items[start + offset]!.projectHeader;
+      return header === undefined
+        ? [entry]
+        : [
+            { type: "v2-project-header", key: `v2-project:${header.key}`, title: header.title },
+            entry,
+          ];
+    });
   const pendingItems = input.pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
     type: "v2-pending",
     key: `v2-${pendingTask.key}`,
@@ -564,7 +593,7 @@ export function buildThreadListV2ListItems(input: {
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
   const activeEnd = workingShelfHeaderIndex ?? workingEnd;
-  const result: ThreadListV2ListItem[] = [...threadItems.slice(0, activeEnd), ...pendingItems];
+  const result: ThreadListV2ListItem[] = [...rowsBetween(0, activeEnd), ...pendingItems];
   const shelfDisabled = input.shelfPreferencesLoading === true;
   if (workingShelfHeaderIndex !== null && workingCount > 0) {
     result.push({
@@ -574,7 +603,7 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.workingShelfExpanded === true,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(workingShelfHeaderIndex, workingEnd));
+    result.push(...rowsBetween(workingShelfHeaderIndex, workingEnd));
   }
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
@@ -584,7 +613,7 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.snoozedShelfExpanded === true,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(snoozedShelfHeaderIndex, snoozedEnd));
+    result.push(...rowsBetween(snoozedShelfHeaderIndex, snoozedEnd));
   }
   if (settledShelfHeaderIndex !== null && settledCount > 0) {
     result.push({
@@ -594,7 +623,7 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.settledShelfExpanded !== false,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(settledShelfHeaderIndex));
+    result.push(...rowsBetween(settledShelfHeaderIndex));
   }
   // Hairlines depend on the final neighbour, so they are stamped after the
   // splice: a recycled cell only re-renders when its divider actually flips.
@@ -607,6 +636,41 @@ export function buildThreadListV2ListItems(input: {
       ? entry
       : { ...entry, showTrailingDivider };
   });
+}
+
+export type ThreadListV2ProjectGroups = ReadonlyArray<{
+  readonly key: string;
+  readonly title: string;
+  readonly projectRefs: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly projectId: ProjectId;
+  }>;
+}>;
+
+/**
+ * The project group each row shows under while the list is grouped by
+ * project: a project key, "" for the "No project" run, or undefined for rows
+ * the environment filter hides. Null while the list renders flat (grouping off
+ * or searching). Move up/down uses the same answer as the rendered list.
+ */
+export function resolveThreadListV2ProjectGroupOf(input: {
+  readonly projectGroups?: ThreadListV2ProjectGroups | null;
+  readonly environmentId: EnvironmentId | null;
+  readonly searchQuery: string;
+}):
+  | ((thread: Pick<EnvironmentThreadShell, "environmentId" | "projectId">) => string | undefined)
+  | null {
+  if (input.projectGroups == null || input.searchQuery.trim().length > 0) return null;
+  const keyByRef = new Map(
+    input.projectGroups.flatMap((group) =>
+      group.projectRefs.map((ref) => [`${ref.environmentId}:${ref.projectId}`, group.key] as const),
+    ),
+  );
+  const environmentId = input.environmentId;
+  return (thread) =>
+    environmentId !== null && thread.environmentId !== environmentId
+      ? undefined
+      : (keyByRef.get(`${thread.environmentId}:${thread.projectId}`) ?? "");
 }
 
 // Streams update a few unsettled rows, so most rebuilds classify the same
@@ -680,6 +744,10 @@ export function buildThreadListV2Items(input: {
       outbox. Such a thread has work the user is waiting on, so it stays in
       the active block even when the server has settled it. */
   readonly queuedThreadKeys?: ReadonlySet<string>;
+  /** Nest each section's rows under project headers, in this project order.
+      Threads of unlisted projects collect under "No project". Ignored while
+      searching, so results stay one flat list. */
+  readonly projectGroups?: ThreadListV2ProjectGroups | null;
 }): ThreadListV2Layout {
   const now = input.now;
   const pending =
@@ -799,59 +867,57 @@ export function buildThreadListV2Items(input: {
           (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
         );
 
+  const projectGroupOf = resolveThreadListV2ProjectGroupOf(input);
+  const projectGroups = projectGroupOf === null ? null : input.projectGroups!;
+  const projectRank = new Map(projectGroups?.map((group, index) => [group.key, index] as const));
+  const projectTitleByKey = new Map(projectGroups?.map((group) => [group.key, group.title]));
   const items: ThreadListV2Item[] = [];
-  for (const thread of applyPendingThreadOrder(
-    sortPinnedThreadsByOrderKey(pinned),
+  const pushSection = (
+    section: string,
+    threads: ReadonlyArray<EnvironmentThreadShell>,
+    row: Pick<ThreadListV2Item, "variant" | "snoozed" | "pinned">,
+  ) => {
+    if (projectGroups === null) {
+      for (const thread of threads) items.push({ thread, ...row, isLast: false });
+      return;
+    }
+    const runs = groupThreadsByProject(
+      threads,
+      (thread) => projectGroupOf?.(thread) || undefined,
+      projectRank,
+    );
+    for (const run of runs) {
+      const projectHeader = {
+        key: `${section}:${run.projectKey ?? ""}`,
+        title:
+          (run.projectKey === null ? undefined : projectTitleByKey.get(run.projectKey)) ??
+          "No project",
+      };
+      run.threads.forEach((thread, index) =>
+        items.push(
+          index === 0
+            ? { thread, ...row, isLast: false, projectHeader }
+            : { thread, ...row, isLast: false },
+        ),
+      );
+    }
+  };
+  pushSection(
     "pinned",
-    pending,
-  )) {
-    items.push({
-      thread,
+    applyPendingThreadOrder(sortPinnedThreadsByOrderKey(pinned), "pinned", pending),
+    {
       variant: "card",
       snoozed: false,
       pinned: true,
-      isLast: false,
-    });
-  }
-  for (const thread of orderedActive) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: false,
-      isLast: false,
-    });
-  }
+    },
+  );
+  pushSection("active", orderedActive, { variant: "card", snoozed: false, pinned: false });
   const workingShelfHeaderIndex = orderedWorking.length > 0 ? items.length : null;
-  for (const thread of visibleWorking) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: false,
-      isLast: false,
-    });
-  }
+  pushSection("working", visibleWorking, { variant: "card", snoozed: false, pinned: false });
   const snoozedShelfHeaderIndex = orderedSnoozed.length > 0 ? items.length : null;
-  for (const thread of visibleSnoozed) {
-    items.push({
-      thread,
-      variant: "slim",
-      snoozed: true,
-      pinned: false,
-      isLast: false,
-    });
-  }
+  pushSection("snoozed", visibleSnoozed, { variant: "slim", snoozed: true, pinned: false });
   const settledShelfHeaderIndex = orderedSettled.length > 0 ? items.length : null;
-  for (const thread of visibleSettled) {
-    items.push({
-      thread,
-      variant: "slim",
-      snoozed: false,
-      pinned: false,
-      isLast: false,
-    });
-  }
+  pushSection("settled", visibleSettled, { variant: "slim", snoozed: false, pinned: false });
   const last = items.at(-1);
   if (last) {
     items[items.length - 1] = { ...last, isLast: true };

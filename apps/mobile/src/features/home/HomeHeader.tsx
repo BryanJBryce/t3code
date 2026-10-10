@@ -39,9 +39,8 @@ export function HomeHeader(props: HomeHeaderProps) {
     [navigation],
   );
   const iconColor = useUniwindTheme()["--color-icon"];
-  // The list uses a fixed creation order and ignores sort/group options, so
-  // the filter menu only carries the filters and the "customized" icon state
-  // keys off those alone.
+  // Grouping is a saved preference, so the "customized" icon state keys off
+  // the filters alone.
   const hasCustomListOptions =
     props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
   const focusSearch = useCallback(() => {
@@ -196,6 +195,14 @@ export function HomeHeader(props: HomeHeaderProps) {
                   </NativeHeaderToolbar.MenuAction>
                 ))}
               </NativeHeaderToolbar.Menu>
+            ) : null}
+            {props.projects.length > 0 && props.onToggleGroupedByProject ? (
+              <NativeHeaderToolbar.MenuAction
+                isOn={props.groupedByProject === true}
+                onPress={props.onToggleGroupedByProject}
+              >
+                <NativeHeaderToolbar.Label>Group by project</NativeHeaderToolbar.Label>
+              </NativeHeaderToolbar.MenuAction>
             ) : null}
           </NativeHeaderToolbar.Menu>
           <NativeHeaderToolbar.Spacer flexible />
