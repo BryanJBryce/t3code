@@ -1,3 +1,7 @@
+// The follow latch owns user intent. A distance threshold would silently stop
+// following when hydration, reconnection, or row measurement moves the end.
+export const THREAD_FEED_END_FOLLOW_THRESHOLD = Number.POSITIVE_INFINITY;
+
 export type ThreadFeedLiveFollowEvent =
   | { readonly type: "reset" }
   | { readonly type: "user-scroll-begin" }

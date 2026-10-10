@@ -80,6 +80,7 @@ import {
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Image,
   Platform,
   type LayoutChangeEvent,
@@ -170,6 +171,7 @@ import {
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
+  THREAD_FEED_END_FOLLOW_THRESHOLD,
   resolveThreadFeedLiveFollow,
   type ThreadFeedLiveFollowEvent,
   type ThreadWorkGroupScrollPosition,
@@ -2695,12 +2697,51 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // content: the list must still remount, and so open at the end, when they
   // arrive.
   const listMountKey = `${feedThreadKey}:${presentedFeed.some((entry) => entry.type !== "thinking") ? "filled" : "empty"}`;
+  const loadedListRef = useRef<LegendListRef | null>(null);
+  const handleListLoad = () => {
+    loadedListRef.current = props.listRef.current;
+  };
   useLayoutEffect(() => {
     const bottom = props.contentInsetEndAdjustment.value;
     if (bottom > 0) {
       props.listRef.current?.reportContentInset({ bottom });
     }
   }, [listMountKey, props.contentInsetEndAdjustment, props.listRef]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let frame: number | null = null;
+      // Native screen reattachment can move the offset without changing the
+      // list's data or size. Restore only an existing follower; a fresh mount
+      // still belongs to initialScrollAtEnd, and history readers keep their place.
+      const restoreEnd = () => {
+        if (frame !== null) cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          const list = props.listRef.current;
+          if (
+            AppState.currentState !== "active" ||
+            !list ||
+            loadedListRef.current !== list ||
+            !endFollowEnabledRef.current ||
+            userScrollSessionRef.current ||
+            disclosureToggleSettling
+          ) {
+            return;
+          }
+          void list.scrollToEnd({ animated: false });
+        });
+      };
+      restoreEnd();
+      const subscription = AppState.addEventListener("change", (state) => {
+        if (state === "active") restoreEnd();
+      });
+      return () => {
+        subscription.remove();
+        if (frame !== null) cancelAnimationFrame(frame);
+      };
+    }, [disclosureToggleSettling, props.listRef]),
+  );
 
   const anchoredEndSpace = useMemo(
     () =>
@@ -3140,6 +3181,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                     },
                   }
             }
+            maintainScrollAtEndThreshold={THREAD_FEED_END_FOLLOW_THRESHOLD}
             maintainVisibleContentPosition={
               endFollowEnabled && !disclosureToggleSettling ? false : maintainVisibleContentPosition
             }
@@ -3183,6 +3225,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // overflow the viewport (the padding clamps to zero).
             alignItemsAtEnd
             initialScrollAtEnd
+            onLoad={handleListLoad}
             onScroll={handleScroll}
             onScrollBeginDrag={handleScrollBeginDrag}
             onScrollEndDrag={handleScrollEndDrag}

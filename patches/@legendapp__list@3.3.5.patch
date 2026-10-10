@@ -241,7 +241,7 @@ index ce1fe00..3ccf6f1 100644
       * Number of columns to render items in.
       * @default 1
 diff --git a/react-native.js b/react-native.js
-index b3c5a30..5ac6bbe 100644
+index b3c5a30..67f21a6 100644
 --- a/react-native.js
 +++ b/react-native.js
 @@ -717,6 +717,15 @@ function hasActiveInitialScroll(state) {
@@ -388,6 +388,15 @@ index b3c5a30..5ac6bbe 100644
      }
      if (!state.maintainingScrollAtEnd) {
        const pendingState = maintainScrollAtEnd.animated ? "pending-animated" : "pending-instant";
+@@ -1578,7 +1621,7 @@ function doMaintainScrollAtEnd(ctx) {
+       requestAnimationFrame(() => {
+         const isStillWithinThreshold = peek$(ctx, "isWithinMaintainScrollAtEndThreshold");
+         const didScrollSinceRequest = state.scroll !== scrollAtRequest;
+-        if (isStillWithinThreshold || !didScrollSinceRequest) {
++        if (state.props.maintainScrollAtEnd && !state.isUserDragging && !state.isMomentumScrolling && (isStillWithinThreshold || !didScrollSinceRequest)) {
+           state.maintainingScrollAtEnd = activeState;
+           const scroller = refScroller.current;
+           if (state.props.horizontal && isHorizontalRTL(state)) {
 @@ -1591,9 +1634,18 @@ function doMaintainScrollAtEnd(ctx) {
                y: 0
              });
@@ -809,7 +818,7 @@ index b3c5a30..5ac6bbe 100644
        recycleItems,
        refreshControl: refreshControlElement ? stylePaddingTopState > 0 ? React2__namespace.cloneElement(refreshControlElement, {
 diff --git a/react-native.mjs b/react-native.mjs
-index 40e87cd..93aac74 100644
+index 40e87cd..b2d8073 100644
 --- a/react-native.mjs
 +++ b/react-native.mjs
 @@ -696,6 +696,15 @@ function hasActiveInitialScroll(state) {
@@ -956,6 +965,15 @@ index 40e87cd..93aac74 100644
      }
      if (!state.maintainingScrollAtEnd) {
        const pendingState = maintainScrollAtEnd.animated ? "pending-animated" : "pending-instant";
+@@ -1557,7 +1600,7 @@ function doMaintainScrollAtEnd(ctx) {
+       requestAnimationFrame(() => {
+         const isStillWithinThreshold = peek$(ctx, "isWithinMaintainScrollAtEndThreshold");
+         const didScrollSinceRequest = state.scroll !== scrollAtRequest;
+-        if (isStillWithinThreshold || !didScrollSinceRequest) {
++        if (state.props.maintainScrollAtEnd && !state.isUserDragging && !state.isMomentumScrolling && (isStillWithinThreshold || !didScrollSinceRequest)) {
+           state.maintainingScrollAtEnd = activeState;
+           const scroller = refScroller.current;
+           if (state.props.horizontal && isHorizontalRTL(state)) {
 @@ -1570,9 +1613,18 @@ function doMaintainScrollAtEnd(ctx) {
                y: 0
              });
